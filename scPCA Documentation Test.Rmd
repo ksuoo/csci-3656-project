@@ -3,21 +3,1088 @@ title: "scPCA Documentation Test"
 output: html_notebook
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
 
 ```{r}
-library(dplyr)
+# ============================================================
+# Component Loadings Comparison: PCA vs Sparse PCA
+# Scatter Plot Style
+# ============================================================
+
+library(sparsepca)
 library(ggplot2)
-library(ggpubr)
-library(elasticnet)
+
+# ------------------------------------------------------------
+# 1. Generate Sample Data
+# ------------------------------------------------------------
+set.seed(42)
+n <- 200
+p <- 100  # 100 features
+
+# Data with signal in first 10 variables
+latent_signal <- rnorm(n)
+X <- matrix(rnorm(n * p, sd = 1), n, p)
+X[, 1:10] <- X[, 1:10] + latent_signal %*% t(rep(1.5, 10))
+
+# Standardize
+X_scaled <- scale(X)
+
+# ------------------------------------------------------------
+# 2. Perform PCA
+# ------------------------------------------------------------
+pca_result <- prcomp(X_scaled, center = TRUE, scale. = TRUE)
+
+# ------------------------------------------------------------
+# 3. Perform Sparse PCA
+# ------------------------------------------------------------
+spca_result <- spca(X_scaled, k = 2, alpha = 0.2, beta = 0.2,
+                    center = TRUE, scale = TRUE, verbose = FALSE)
+
+# ------------------------------------------------------------
+# 4. Prepare Data for Plot
+# ------------------------------------------------------------
+loadings_pca <- pca_result$rotation[, 1]
+loadings_spca <- spca_result$loadings[, 1]
+
+df_loadings <- data.frame(
+  FeatureIndex = rep(1:p, 2),
+  Loading = c(loadings_pca, loadings_spca),
+  Method = factor(rep(c("PCA", "SparsePCA"), each = p), levels = c("PCA", "SparsePCA")),
+  TrueSignal = factor(
+    rep(c(rep("Signal", 10), rep("Noise", p - 10)), 2),
+    levels = c("Signal", "Noise")
+  )
+)
+
+# ------------------------------------------------------------
+# 5. Create the Plot
+# ------------------------------------------------------------
+fig_loadings <- ggplot(df_loadings, aes(x = FeatureIndex, y = Loading, color = TrueSignal)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 2, alpha = 0.7) +
+  facet_wrap(~Method, ncol = 1, scales = "free_y") +
+  scale_color_manual(
+    values = c("Signal" = "#e74c3c", "Noise" = "gray60"),
+    name = "TrueSignal"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "Component Loadings Comparison (First 100 Features)",
+    subtitle = "Red = True signal features, Gray = Noise features",
+    x = "Feature Index",
+    y = "Loading Value"
+  )
+
+print(fig_loadings)
+
+# ------------------------------------------------------------
+# 6. Summary Statistics
+# ------------------------------------------------------------
+cat("\n============ SUMMARY ============\n\n")
+
+cat("Non-zero loadings in PC1:\n")
+cat("  PCA:       ", sum(loadings_pca != 0), "/", p, "\n")
+cat("  Sparse PCA:", sum(loadings_spca != 0), "/", p, "\n\n")
+
+cat("Signal features (1-10) with non-zero loadings:\n")
+cat("  PCA:       ", sum(loadings_pca[1:10] != 0), "/10\n")
+cat("  Sparse PCA:", sum(loadings_spca[1:10] != 0), "/10\n\n")
+
+cat("Noise features (11-100) with non-zero loadings:\n")
+cat("  PCA:       ", sum(loadings_pca[11:p] != 0), "/90\n")
+cat("  Sparse PCA:", sum(loadings_spca[11:p] != 0), "/90\n")
+
+# Save figure
+# ggsave("pca_vs_sparsepca_loadings.png", fig_loadings, width = 10, height = 6, dpi = 150)
+```
+```{r}
+# ============================================================
+# Comparison: Standard PCA vs scPCA (Sparse Contrastive PCA)
+# Focus: Loading Values and Feature Selection
+# ============================================================
+
 library(scPCA)
-library(microbenchmark)
+library(ggplot2)
+library(gridExtra)
+
+# ------------------------------------------------------------
+# 1. Generate Sample Data
+# ------------------------------------------------------------
+set.seed(42)
+n <- 200
+p <- 100  # 100 features
+
+# TARGET data: signal in first 10 variables
+latent_signal <- rnorm(n)
+target_data <- matrix(rnorm(n * p, sd = 1), n, p)
+target_data[, 1:10] <- target_data[, 1:10] + latent_signal %*% t(rep(1.5, 10))
+
+# BACKGROUND data (control - no signal)
+n_bg <- 200
+background_data <- matrix(rnorm(n_bg * p, sd = 1), n_bg, p)
+
+# Standardize
+target_scaled <- scale(target_data)
+background_scaled <- scale(background_data)
+
+# ------------------------------------------------------------
+# 2. Perform Standard PCA
+# ------------------------------------------------------------
+pca_result <- prcomp(target_scaled, center = TRUE, scale. = TRUE)
+
+# ------------------------------------------------------------
+# 3. Perform scPCA (Sparse Contrastive PCA)
+# ------------------------------------------------------------
+scpca_result <- scPCA(
+  target = target_scaled,
+  background = background_scaled,
+  penalties = seq(0.1, 1.5, length.out = 10),  # Sparsity penalties
+  n_eigen = 2,
+  n_centers = 4,
+  contrasts = exp(seq(log(0.1), log(100), length.out = 15))
+)
+
+# ------------------------------------------------------------
+# 4. Extract Loadings
+# ------------------------------------------------------------
+loadings_pca <- pca_result$rotation[, 1]
+loadings_scpca <- scpca_result$rotation[, 1]
+
+# ------------------------------------------------------------
+# FIGURE 1: Loadings Scatter Plot Comparison
+# ------------------------------------------------------------
+df_loadings <- data.frame(
+  FeatureIndex = rep(1:p, 2),
+  Loading = c(loadings_pca, loadings_scpca),
+  Method = factor(rep(c("PCA", "scPCA"), each = p), levels = c("PCA", "scPCA")),
+  TrueSignal = factor(
+    rep(c(rep("Signal", 10), rep("Noise", p - 10)), 2),
+    levels = c("Signal", "Noise")
+  )
+)
+
+fig1 <- ggplot(df_loadings, aes(x = FeatureIndex, y = Loading, color = TrueSignal)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 2, alpha = 0.7) +
+  facet_wrap(~Method, ncol = 1, scales = "free_y") +
+  scale_color_manual(
+    values = c("Signal" = "#e74c3c", "Noise" = "gray60"),
+    name = "TrueSignal"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "Component Loadings Comparison (First 100 Features)",
+    subtitle = "Red = True signal features, Gray = Noise features",
+    x = "Feature Index",
+    y = "Loading Value"
+  )
+
+print(fig1)
+
+# ------------------------------------------------------------
+# FIGURE 2: Feature Selection - Recovery of True Signal
+# ------------------------------------------------------------
+
+# Define threshold for "selected" feature (non-zero for scPCA, top 15 for PCA)
+threshold_pca <- sort(abs(loadings_pca), decreasing = TRUE)[15]
+selected_pca <- abs(loadings_pca) >= threshold_pca
+selected_scpca <- loadings_scpca != 0
+
+# Count correctly identified signal features
+tp_pca <- sum(selected_pca[1:10])
+tp_scpca <- sum(selected_scpca[1:10])
+
+df_recovery <- data.frame(
+  Method = c("Standard PCA", "scPCA"),
+  Identified = c(tp_pca, tp_scpca)
+)
+
+fig2 <- ggplot(df_recovery, aes(x = Method, y = Identified, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "#e74c3c", linewidth = 1) +
+  geom_text(aes(label = paste0(Identified, "/10")), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("Standard PCA" = "#3498db", "scPCA" = "#27ae60")) +
+  scale_y_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "#e74c3c", size = 10, hjust = 0.5),
+    legend.position = "none",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Recovery of True Signal Features",
+    subtitle = "True number of signal features = 10",
+    x = "",
+    y = "# Correctly Identified"
+  )
+
+print(fig2)
+
+# ------------------------------------------------------------
+# FIGURE 3: Variance / Loading Magnitude Comparison
+# ------------------------------------------------------------
+df_variance <- data.frame(
+  Method = c("Standard PCA", "scPCA"),
+  VarExplained = c(
+    summary(pca_result)$importance[2, 1] * 100,
+    var(scpca_result$x[, 1]) / sum(apply(target_scaled, 2, var)) * 100
+  )
+)
+
+fig3 <- ggplot(df_variance, aes(x = Method, y = VarExplained, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = paste0(round(VarExplained, 1), "%")), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("Standard PCA" = "#3498db", "scPCA" = "#27ae60")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    legend.position = "none",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Variance Explained by PC1",
+    x = "",
+    y = "Variance Explained (%)"
+  )
+
+print(fig3)
+
+# ------------------------------------------------------------
+# FIGURE 4: Feature Selection Precision & Recall
+# ------------------------------------------------------------
+
+# Calculate precision and recall
+precision_pca <- tp_pca / sum(selected_pca)
+recall_pca <- tp_pca / 10
+precision_scpca <- ifelse(sum(selected_scpca) > 0, tp_scpca / sum(selected_scpca), 0)
+recall_scpca <- tp_scpca / 10
+
+df_metrics <- data.frame(
+  Method = rep(c("Standard PCA", "scPCA"), 2),
+  Metric = rep(c("Precision", "Recall"), each = 2),
+  Value = c(precision_pca, precision_scpca, recall_pca, recall_scpca)
+)
+
+fig4 <- ggplot(df_metrics, aes(x = Method, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = round(Value, 2)), vjust = -0.5, size = 4, fontface = "bold") +
+  facet_wrap(~Metric) +
+  scale_fill_manual(values = c("Standard PCA" = "#3498db", "scPCA" = "#27ae60")) +
+  scale_y_continuous(limits = c(0, 1.1)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "none",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Feature Selection Performance",
+    x = "",
+    y = "Score"
+  )
+
+print(fig4)
+
+# ------------------------------------------------------------
+# FIGURE 5: Number of Non-Zero Loadings
+# ------------------------------------------------------------
+nonzero_pca <- sum(abs(loadings_pca) > 1e-10)
+nonzero_scpca <- sum(abs(loadings_scpca) > 1e-10)
+
+df_nonzero <- data.frame(
+  Method = c("Standard PCA", "scPCA"),
+  NonZero = c(nonzero_pca, nonzero_scpca),
+  TruePositive = c(tp_pca, tp_scpca),
+  FalsePositive = c(nonzero_pca - tp_pca, nonzero_scpca - tp_scpca)
+)
+
+df_nonzero_long <- data.frame(
+  Method = rep(c("Standard PCA", "scPCA"), 2),
+  Type = rep(c("True Signal", "Noise"), each = 2),
+  Count = c(tp_pca, tp_scpca, nonzero_pca - tp_pca, nonzero_scpca - tp_scpca)
+)
+
+fig5 <- ggplot(df_nonzero_long, aes(x = Method, y = Count, fill = Type)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), size = 4, fontface = "bold", color = "white") +
+  scale_fill_manual(values = c("True Signal" = "#27ae60", "Noise" = "#e74c3c")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    legend.position = "top",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Non-Zero Loadings Breakdown",
+    subtitle = "Green = correctly selected signal, Red = incorrectly selected noise",
+    x = "",
+    y = "# Features with Non-Zero Loadings"
+  )
+
+print(fig5)
+
+# ------------------------------------------------------------
+# Summary Statistics
+# ------------------------------------------------------------
+cat("\n================ SUMMARY ================\n\n")
+
+cat("scPCA Selected Parameters:\n")
+cat("  Contrast:", round(scpca_result$contrast, 3), "\n")
+cat("  Penalty:", round(scpca_result$penalty, 3), "\n\n")
+
+cat("Non-zero loadings in PC1:\n")
+cat("  PCA:  ", nonzero_pca, "/", p, "\n")
+cat("  scPCA:", nonzero_scpca, "/", p, "\n\n")
+
+cat("Signal features (1-10) correctly identified:\n")
+cat("  PCA:  ", tp_pca, "/10\n")
+cat("  scPCA:", tp_scpca, "/10\n\n")
+
+cat("Noise features (11-100) incorrectly selected:\n")
+cat("  PCA:  ", sum(selected_pca[11:p]), "/90\n")
+cat("  scPCA:", sum(selected_scpca[11:p]), "/90\n\n")
+
+cat("Precision (TP / Total Selected):\n")
+cat("  PCA:  ", round(precision_pca, 3), "\n")
+cat("  scPCA:", round(precision_scpca, 3), "\n\n")
+
+cat("Recall (TP / Total Signal):\n")
+cat("  PCA:  ", round(recall_pca, 3), "\n")
+cat("  scPCA:", round(recall_scpca, 3), "\n")
+
+# ------------------------------------------------------------
+# Save figures (optional)
+# ------------------------------------------------------------
+# ggsave("fig1_loadings_scatter.png", fig1, width = 10, height = 6, dpi = 150)
+# ggsave("fig2_signal_recovery.png", fig2, width = 6, height = 5, dpi = 150)
+# ggsave("fig3_variance.png", fig3, width = 6, height = 5, dpi = 150)
+# ggsave("fig4_precision_recall.png", fig4, width = 8, height = 5, dpi = 150)
+# ggsave("fig5_nonzero_breakdown.png", fig5, width = 7, height = 5, dpi = 150)
+```
+```{r}
+# ============================================================
+# Comparison: Standard PCA vs cPCA (Contrastive PCA)
+# Focus: Loading Values and Feature Selection
+# ============================================================
+
+library(scPCA)
+library(ggplot2)
+library(gridExtra)
+
+# ------------------------------------------------------------
+# 1. Generate Sample Data
+# ------------------------------------------------------------
+set.seed(42)
+n <- 200
+p <- 100  # 100 features
+
+# TARGET data: signal in first 10 variables
+latent_signal <- rnorm(n)
+target_data <- matrix(rnorm(n * p, sd = 1), n, p)
+target_data[, 1:10] <- target_data[, 1:10] + latent_signal %*% t(rep(1.5, 10))
+
+# BACKGROUND data (control - no signal)
+n_bg <- 200
+background_data <- matrix(rnorm(n_bg * p, sd = 1), n_bg, p)
+
+# Standardize
+target_scaled <- scale(target_data)
+background_scaled <- scale(background_data)
+
+# ------------------------------------------------------------
+# 2. Perform Standard PCA
+# ------------------------------------------------------------
+pca_result <- prcomp(target_scaled, center = TRUE, scale. = TRUE)
+
+# ------------------------------------------------------------
+# 3. Perform cPCA (Contrastive PCA - penalties = 0)
+# ------------------------------------------------------------
+cpca_result <- scPCA(
+  target = target_scaled,
+  background = background_scaled,
+  penalties = 0,  # No sparsity = cPCA
+  n_eigen = 2,
+  n_centers = 4,
+  contrasts = exp(seq(log(0.1), log(100), length.out = 15))
+)
+
+# ------------------------------------------------------------
+# 4. Extract Loadings
+# ------------------------------------------------------------
+loadings_pca <- pca_result$rotation[, 1]
+loadings_cpca <- cpca_result$rotation[, 1]
+
+# ------------------------------------------------------------
+# FIGURE 1: Loadings Scatter Plot Comparison
+# ------------------------------------------------------------
+df_loadings <- data.frame(
+  FeatureIndex = rep(1:p, 2),
+  Loading = c(loadings_pca, loadings_cpca),
+  Method = factor(rep(c("PCA", "cPCA"), each = p), levels = c("PCA", "cPCA")),
+  TrueSignal = factor(
+    rep(c(rep("Signal", 10), rep("Noise", p - 10)), 2),
+    levels = c("Signal", "Noise")
+  )
+)
+
+fig1 <- ggplot(df_loadings, aes(x = FeatureIndex, y = Loading, color = TrueSignal)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 2, alpha = 0.7) +
+  facet_wrap(~Method, ncol = 1, scales = "free_y") +
+  scale_color_manual(
+    values = c("Signal" = "#e74c3c", "Noise" = "gray60"),
+    name = "TrueSignal"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "Component Loadings Comparison (First 100 Features)",
+    subtitle = "Red = True signal features, Gray = Noise features",
+    x = "Feature Index",
+    y = "Loading Value"
+  )
+
+print(fig1)
+
+# ------------------------------------------------------------
+# FIGURE 2: Feature Selection - Recovery of True Signal
+# Note: cPCA doesn't induce sparsity, so we use top-k selection
+# ------------------------------------------------------------
+
+# For fair comparison, select top 15 features by absolute loading
+k <- 15
+top_k_pca <- order(abs(loadings_pca), decreasing = TRUE)[1:k]
+top_k_cpca <- order(abs(loadings_cpca), decreasing = TRUE)[1:k]
+
+# Count correctly identified signal features (in top k)
+tp_pca <- sum(top_k_pca <= 10)
+tp_cpca <- sum(top_k_cpca <= 10)
+
+df_recovery <- data.frame(
+  Method = c("Standard PCA", "cPCA"),
+  Identified = c(tp_pca, tp_cpca)
+)
+
+fig2 <- ggplot(df_recovery, aes(x = Method, y = Identified, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "#e74c3c", linewidth = 1) +
+  geom_text(aes(label = paste0(Identified, "/", k)), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("Standard PCA" = "#3498db", "cPCA" = "#9b59b6")) +
+  scale_y_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "#e74c3c", size = 10, hjust = 0.5),
+    legend.position = "none",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Recovery of True Signal Features",
+    subtitle = paste0("True number of signal features = 10, Top ", k, " selected"),
+    x = "",
+    y = "# Correctly Identified"
+  )
+
+print(fig2)
+
+# ------------------------------------------------------------
+# FIGURE 3: Variance Explained by PC1
+# ------------------------------------------------------------
+df_variance <- data.frame(
+  Method = c("Standard PCA", "cPCA"),
+  VarExplained = c(
+    summary(pca_result)$importance[2, 1] * 100,
+    var(cpca_result$x[, 1]) / sum(apply(target_scaled, 2, var)) * 100
+  )
+)
+
+fig3 <- ggplot(df_variance, aes(x = Method, y = VarExplained, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = paste0(round(VarExplained, 1), "%")), vjust = -0.5, size = 5, fontface = "bold") +
+  scale_fill_manual(values = c("Standard PCA" = "#3498db", "cPCA" = "#9b59b6")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    legend.position = "none",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Variance Explained by PC1",
+    x = "",
+    y = "Variance Explained (%)"
+  )
+
+print(fig3)
+
+# ------------------------------------------------------------
+# FIGURE 4: Feature Selection Precision & Recall (Top-k)
+# ------------------------------------------------------------
+
+# Precision = TP / k (selected)
+# Recall = TP / 10 (total signal)
+precision_pca <- tp_pca / k
+recall_pca <- tp_pca / 10
+precision_cpca <- tp_cpca / k
+recall_cpca <- tp_cpca / 10
+
+df_metrics <- data.frame(
+  Method = rep(c("Standard PCA", "cPCA"), 2),
+  Metric = rep(c("Precision", "Recall"), each = 2),
+  Value = c(precision_pca, precision_cpca, recall_pca, recall_cpca)
+)
+
+fig4 <- ggplot(df_metrics, aes(x = Method, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = round(Value, 2)), vjust = -0.5, size = 4, fontface = "bold") +
+  facet_wrap(~Metric) +
+  scale_fill_manual(values = c("Standard PCA" = "#3498db", "cPCA" = "#9b59b6")) +
+  scale_y_continuous(limits = c(0, 1.1)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "none",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Feature Selection Performance (Top-k Selection)",
+    subtitle = paste0("k = ", k, " features selected by absolute loading"),
+    x = "",
+    y = "Score"
+  )
+
+print(fig4)
+
+# ------------------------------------------------------------
+# FIGURE 5: Top-k Features Breakdown
+# ------------------------------------------------------------
+df_topk <- data.frame(
+  Method = rep(c("Standard PCA", "cPCA"), 2),
+  Type = rep(c("True Signal", "Noise"), each = 2),
+  Count = c(tp_pca, tp_cpca, k - tp_pca, k - tp_cpca)
+)
+
+fig5 <- ggplot(df_topk, aes(x = Method, y = Count, fill = Type)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), 
+            size = 4, fontface = "bold", color = "white") +
+  scale_fill_manual(values = c("True Signal" = "#27ae60", "Noise" = "#e74c3c")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    legend.position = "top",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = paste0("Top ", k, " Features Breakdown"),
+    subtitle = "Green = correctly selected signal, Red = incorrectly selected noise",
+    x = "",
+    y = "# Features"
+  )
+
+print(fig5)
+
+# ------------------------------------------------------------
+# FIGURE 6: Loading Magnitude Comparison (Signal vs Noise)
+# ------------------------------------------------------------
+df_magnitude <- data.frame(
+  Method = rep(c("Standard PCA", "cPCA"), 2),
+  Type = rep(c("Signal (1-10)", "Noise (11-100)"), each = 2),
+  MeanAbsLoading = c(
+    mean(abs(loadings_pca[1:10])),
+    mean(abs(loadings_cpca[1:10])),
+    mean(abs(loadings_pca[11:p])),
+    mean(abs(loadings_cpca[11:p]))
+  )
+)
+
+fig6 <- ggplot(df_magnitude, aes(x = Method, y = MeanAbsLoading, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  geom_text(aes(label = round(MeanAbsLoading, 3)), 
+            position = position_dodge(width = 0.7), vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = c("Signal (1-10)" = "#27ae60", "Noise (11-100)" = "#95a5a6")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    legend.position = "top",
+    axis.title = element_text(size = 11)
+  ) +
+  labs(
+    title = "Mean Absolute Loading: Signal vs Noise Features",
+    x = "",
+    y = "Mean |Loading|"
+  )
+
+print(fig6)
+
+# ------------------------------------------------------------
+# Summary Statistics
+# ------------------------------------------------------------
+cat("\n================ SUMMARY ================\n\n")
+
+cat("cPCA Selected Contrast Parameter:", round(cpca_result$contrast, 3), "\n\n")
+
+cat("Feature Selection (Top", k, "by |loading|):\n")
+cat("  PCA  - Signal:", tp_pca, "/ Noise:", k - tp_pca, "\n")
+cat("  cPCA - Signal:", tp_cpca, "/ Noise:", k - tp_cpca, "\n\n")
+
+cat("Precision (TP / Selected):\n")
+cat("  PCA: ", round(precision_pca, 3), "\n")
+cat("  cPCA:", round(precision_cpca, 3), "\n\n")
+
+cat("Recall (TP / Total Signal):\n")
+cat("  PCA: ", round(recall_pca, 3), "\n")
+cat("  cPCA:", round(recall_cpca, 3), "\n\n")
+
+# Signal-to-noise ratio in loadings
+snr_pca <- mean(abs(loadings_pca[1:10])) / mean(abs(loadings_pca[11:p]))
+snr_cpca <- mean(abs(loadings_cpca[1:10])) / mean(abs(loadings_cpca[11:p]))
+
+cat("Signal-to-Noise Ratio (Mean |Signal Loading| / Mean |Noise Loading|):\n")
+cat("  PCA: ", round(snr_pca, 2), "\n")
+cat("  cPCA:", round(snr_cpca, 2), "\n")
+
+# ------------------------------------------------------------
+# Save figures (optional)
+# ------------------------------------------------------------
+# ggsave("cpca_fig1_loadings_scatter.png", fig1, width = 10, height = 6, dpi = 150)
+# ggsave("cpca_fig2_signal_recovery.png", fig2, width = 6, height = 5, dpi = 150)
+# ggsave("cpca_fig3_variance.png", fig3, width = 6, height = 5, dpi = 150)
+# ggsave("cpca_fig4_precision_recall.png", fig4, width = 8, height = 5, dpi = 150)
+# ggsave("cpca_fig5_topk_breakdown.png", fig5, width = 7, height = 5, dpi = 150)
+# ggsave("cpca_fig6_magnitude.png", fig6, width = 8, height = 5, dpi = 150)
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+```{r}
+# ============================================================
+# Complete Comparison: PCA vs Sparse PCA vs cPCA vs scPCA
+# Focus: Loading Values and Feature Selection
+# ============================================================
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+library(scPCA)
+library(sparsepca)
+library(ggplot2)
+library(gridExtra)
+library(reshape2)
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+# ------------------------------------------------------------
+# 1. Generate Sample Data
+# ------------------------------------------------------------
+set.seed(42)
+n <- 200
+p <- 100  # 100 features
+
+# TARGET data: signal in first 10 variables
+latent_signal <- rnorm(n)
+target_data <- matrix(rnorm(n * p, sd = 1), n, p)
+target_data[, 1:10] <- target_data[, 1:10] + latent_signal %*% t(rep(1.5, 10))
+
+# Class labels
+classes <- factor(ifelse(latent_signal > 0, "A", "B"))
+
+# BACKGROUND data (control - no signal)
+n_bg <- 200
+background_data <- matrix(rnorm(n_bg * p, sd = 1), n_bg, p)
+
+# Standardize
+target_scaled <- scale(target_data)
+background_scaled <- scale(background_data)
+
+# ------------------------------------------------------------
+# 2. Perform All Methods
+# ------------------------------------------------------------
+
+# Standard PCA
+pca_result <- prcomp(target_scaled, center = TRUE, scale. = TRUE)
+
+# Sparse PCA
+spca_result <- spca(target_scaled, k = 2, alpha = 0.2, beta = 0.2,
+                    center = TRUE, scale = TRUE, verbose = FALSE)
+
+# cPCA (penalties = 0)
+cpca_result <- scPCA(
+  target = target_scaled,
+  background = background_scaled,
+  penalties = 0,
+  n_eigen = 2,
+  n_centers = 4,
+  contrasts = exp(seq(log(0.1), log(100), length.out = 15))
+)
+
+# scPCA (sparse + contrastive)
+scpca_result <- scPCA(
+  target = target_scaled,
+  background = background_scaled,
+  penalties = seq(0.1, 1.5, length.out = 10),
+  n_eigen = 2,
+  n_centers = 4,
+  contrasts = exp(seq(log(0.1), log(100), length.out = 15))
+)
+
+# ------------------------------------------------------------
+# 3. Extract Loadings
+# ------------------------------------------------------------
+loadings_pca <- pca_result$rotation[, 1]
+loadings_spca <- spca_result$loadings[, 1]
+loadings_cpca <- cpca_result$rotation[, 1]
+loadings_scpca <- scpca_result$rotation[, 1]
+
+# ------------------------------------------------------------
+# FIGURE 1: Loadings Scatter Plot - All Methods
+# ------------------------------------------------------------
+df_loadings <- data.frame(
+  FeatureIndex = rep(1:p, 4),
+  Loading = c(loadings_pca, loadings_spca, loadings_cpca, loadings_scpca),
+  Method = factor(
+    rep(c("PCA", "Sparse PCA", "cPCA", "scPCA"), each = p),
+    levels = c("PCA", "Sparse PCA", "cPCA", "scPCA")
+  ),
+  TrueSignal = factor(
+    rep(c(rep("Signal", 10), rep("Noise", p - 10)), 4),
+    levels = c("Signal", "Noise")
+  )
+)
+
+fig1 <- ggplot(df_loadings, aes(x = FeatureIndex, y = Loading, color = TrueSignal)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 1.8, alpha = 0.7) +
+  facet_wrap(~Method, ncol = 1, scales = "free_y") +
+  scale_color_manual(
+    values = c("Signal" = "#e74c3c", "Noise" = "gray60"),
+    name = "TrueSignal"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 10),
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "Component Loadings Comparison (All Methods)",
+    subtitle = "Red = True signal features (1-10), Gray = Noise features (11-100)",
+    x = "Feature Index",
+    y = "Loading Value"
+  )
+
+print(fig1)
+
+# ------------------------------------------------------------
+# FIGURE 2: Feature Selection - Recovery of True Signal
+# ------------------------------------------------------------
+
+# For sparse methods: count non-zero in signal
+# For non-sparse: use top-k selection
+k <- 15
+
+# Non-zero counts for sparse methods
+nonzero_spca <- sum(loadings_spca != 0)
+nonzero_scpca <- sum(loadings_scpca != 0)
+
+# True positives
+tp_pca <- sum(order(abs(loadings_pca), decreasing = TRUE)[1:k] <= 10)
+tp_spca <- sum(loadings_spca[1:10] != 0)
+tp_cpca <- sum(order(abs(loadings_cpca), decreasing = TRUE)[1:k] <= 10)
+tp_scpca <- sum(loadings_scpca[1:10] != 0)
+
+df_recovery <- data.frame(
+  Method = factor(c("PCA", "Sparse PCA", "cPCA", "scPCA"),
+                  levels = c("PCA", "Sparse PCA", "cPCA", "scPCA")),
+  Identified = c(tp_pca, tp_spca, tp_cpca, tp_scpca)
+)
+
+fig2 <- ggplot(df_recovery, aes(x = Method, y = Identified, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "#e74c3c", linewidth = 1) +
+  geom_text(aes(label = paste0(Identified, "/10")), vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_fill_manual(values = c("PCA" = "#3498db", "Sparse PCA" = "#e67e22", 
+                               "cPCA" = "#9b59b6", "scPCA" = "#27ae60")) +
+  scale_y_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "#e74c3c", size = 10, hjust = 0.5),
+    legend.position = "none",
+    axis.title = element_text(size = 11),
+    axis.text.x = element_text(size = 10, face = "bold")
+  ) +
+  labs(
+    title = "Recovery of True Signal Features",
+    subtitle = "True number of signal features = 10",
+    x = "",
+    y = "# Correctly Identified"
+  )
+
+print(fig2)
+
+# ------------------------------------------------------------
+# FIGURE 3: Precision & Recall Comparison
+# ------------------------------------------------------------
+
+# Calculate precision and recall for all methods
+# PCA & cPCA: top-k selection
+# Sparse PCA & scPCA: non-zero selection
+
+fp_pca <- k - tp_pca
+fp_spca <- sum(loadings_spca[11:p] != 0)
+fp_cpca <- k - tp_cpca
+fp_scpca <- sum(loadings_scpca[11:p] != 0)
+
+total_selected <- c(k, nonzero_spca, k, nonzero_scpca)
+
+precision <- c(tp_pca, tp_spca, tp_cpca, tp_scpca) / total_selected
+precision[is.nan(precision)] <- 0
+
+recall <- c(tp_pca, tp_spca, tp_cpca, tp_scpca) / 10
+
+df_metrics <- data.frame(
+  Method = rep(c("PCA", "Sparse PCA", "cPCA", "scPCA"), 2),
+  Metric = rep(c("Precision", "Recall"), each = 4),
+  Value = c(precision, recall)
+)
+df_metrics$Method <- factor(df_metrics$Method, levels = c("PCA", "Sparse PCA", "cPCA", "scPCA"))
+
+fig3 <- ggplot(df_metrics, aes(x = Method, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = round(Value, 2)), vjust = -0.5, size = 3.5, fontface = "bold") +
+  facet_wrap(~Metric) +
+  scale_fill_manual(values = c("PCA" = "#3498db", "Sparse PCA" = "#e67e22", 
+                               "cPCA" = "#9b59b6", "scPCA" = "#27ae60")) +
+  scale_y_continuous(limits = c(0, 1.15)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "none",
+    axis.title = element_text(size = 11),
+    axis.text.x = element_text(angle = 45, hjust = 1, face = "bold")
+  ) +
+  labs(
+    title = "Feature Selection Performance",
+    subtitle = "PCA/cPCA: top-15 selection | Sparse PCA/scPCA: non-zero selection",
+    x = "",
+    y = "Score"
+  )
+
+print(fig3)
+
+# ------------------------------------------------------------
+# FIGURE 4: Number of Selected Features Breakdown
+# ------------------------------------------------------------
+df_selected <- data.frame(
+  Method = rep(c("PCA", "Sparse PCA", "cPCA", "scPCA"), 2),
+  Type = rep(c("True Signal", "Noise"), each = 4),
+  Count = c(tp_pca, tp_spca, tp_cpca, tp_scpca,
+            fp_pca, fp_spca, fp_cpca, fp_scpca)
+)
+df_selected$Method <- factor(df_selected$Method, levels = c("PCA", "Sparse PCA", "cPCA", "scPCA"))
+
+fig4 <- ggplot(df_selected, aes(x = Method, y = Count, fill = Type)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), 
+            size = 4, fontface = "bold", color = "white") +
+  scale_fill_manual(values = c("True Signal" = "#27ae60", "Noise" = "#e74c3c")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    legend.position = "top",
+    axis.title = element_text(size = 11),
+    axis.text.x = element_text(size = 10, face = "bold")
+  ) +
+  labs(
+    title = "Selected Features Breakdown",
+    subtitle = "Green = True signal, Red = Noise (false positives)",
+    x = "",
+    y = "# Features Selected"
+  )
+
+print(fig4)
+
+# ------------------------------------------------------------
+# FIGURE 5: Mean Absolute Loading - Signal vs Noise
+# ------------------------------------------------------------
+df_magnitude <- data.frame(
+  Method = rep(c("PCA", "Sparse PCA", "cPCA", "scPCA"), 2),
+  Type = rep(c("Signal (1-10)", "Noise (11-100)"), each = 4),
+  MeanAbsLoading = c(
+    mean(abs(loadings_pca[1:10])), mean(abs(loadings_spca[1:10])),
+    mean(abs(loadings_cpca[1:10])), mean(abs(loadings_scpca[1:10])),
+    mean(abs(loadings_pca[11:p])), mean(abs(loadings_spca[11:p])),
+    mean(abs(loadings_cpca[11:p])), mean(abs(loadings_scpca[11:p]))
+  )
+)
+df_magnitude$Method <- factor(df_magnitude$Method, levels = c("PCA", "Sparse PCA", "cPCA", "scPCA"))
+
+fig5 <- ggplot(df_magnitude, aes(x = Method, y = MeanAbsLoading, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  geom_text(aes(label = round(MeanAbsLoading, 3)), 
+            position = position_dodge(width = 0.7), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Signal (1-10)" = "#27ae60", "Noise (11-100)" = "#95a5a6")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    legend.position = "top",
+    axis.title = element_text(size = 11),
+    axis.text.x = element_text(size = 10, face = "bold")
+  ) +
+  labs(
+    title = "Mean Absolute Loading: Signal vs Noise",
+    x = "",
+    y = "Mean |Loading|"
+  )
+
+print(fig5)
+
+# ------------------------------------------------------------
+# FIGURE 6: Signal-to-Noise Ratio in Loadings
+# ------------------------------------------------------------
+snr <- c(
+  mean(abs(loadings_pca[1:10])) / mean(abs(loadings_pca[11:p])),
+  mean(abs(loadings_spca[1:10])) / mean(abs(loadings_spca[11:p])),
+  mean(abs(loadings_cpca[1:10])) / mean(abs(loadings_cpca[11:p])),
+  mean(abs(loadings_scpca[1:10])) / mean(abs(loadings_scpca[11:p]))
+)
+snr[is.nan(snr) | is.infinite(snr)] <- max(snr[is.finite(snr)]) * 1.2
+
+df_snr <- data.frame(
+  Method = factor(c("PCA", "Sparse PCA", "cPCA", "scPCA"),
+                  levels = c("PCA", "Sparse PCA", "cPCA", "scPCA")),
+  SNR = snr
+)
+
+fig6 <- ggplot(df_snr, aes(x = Method, y = SNR, fill = Method)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = round(SNR, 2)), vjust = -0.5, size = 4.5, fontface = "bold") +
+  scale_fill_manual(values = c("PCA" = "#3498db", "Sparse PCA" = "#e67e22", 
+                               "cPCA" = "#9b59b6", "scPCA" = "#27ae60")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5),
+    legend.position = "none",
+    axis.title = element_text(size = 11),
+    axis.text.x = element_text(size = 10, face = "bold")
+  ) +
+  labs(
+    title = "Signal-to-Noise Ratio in PC1 Loadings",
+    subtitle = "Higher = better separation between signal and noise features",
+    x = "",
+    y = "SNR (Signal / Noise)"
+  )
+
+print(fig6)
+
+# ------------------------------------------------------------
+# FIGURE 7: Score Plots - Class Separation
+# ------------------------------------------------------------
+scores_pca <- as.matrix(target_scaled) %*% loadings_pca
+scores_spca <- as.matrix(target_scaled) %*% loadings_spca
+scores_cpca <- cpca_result$x[, 1]
+scores_scpca <- scpca_result$x[, 1]
+
+scores_pca_2 <- pca_result$x[, 2]
+scores_spca_2 <- as.matrix(target_scaled) %*% spca_result$loadings[, 2]
+scores_cpca_2 <- cpca_result$x[, 2]
+scores_scpca_2 <- scpca_result$x[, 2]
+
+df_scores <- data.frame(
+  PC1 = c(scores_pca, scores_spca, scores_cpca, scores_scpca),
+  PC2 = c(scores_pca_2, scores_spca_2, scores_cpca_2, scores_scpca_2),
+  Class = rep(classes, 4),
+  Method = factor(
+    rep(c("PCA", "Sparse PCA", "cPCA", "scPCA"), each = n),
+    levels = c("PCA", "Sparse PCA", "cPCA", "scPCA")
+  )
+)
+
+fig7 <- ggplot(df_scores, aes(x = PC1, y = PC2, color = Class)) +
+  geom_point(alpha = 0.6, size = 2) +
+  facet_wrap(~Method, scales = "free") +
+  scale_color_manual(values = c("A" = "#e74c3c", "B" = "#3498db")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    strip.text = element_text(face = "bold", size = 10),
+    legend.position = "bottom"
+  ) +
+  labs(
+    title = "Score Plots: Class Separation Across Methods",
+    x = "Component 1",
+    y = "Component 2"
+  )
+
+print(fig7)
+
+# ------------------------------------------------------------
+# Summary Table
+# ------------------------------------------------------------
+cat("\n==================== SUMMARY TABLE ====================\n\n")
+
+summary_table <- data.frame(
+  Method = c("PCA", "Sparse PCA", "cPCA", "scPCA"),
+  `Non-Zero Loadings` = c(p, nonzero_spca, p, nonzero_scpca),
+  `True Positives` = c(tp_pca, tp_spca, tp_cpca, tp_scpca),
+  `False Positives` = c(fp_pca, fp_spca, fp_cpca, fp_scpca),
+  Precision = round(precision, 3),
+  Recall = round(recall, 3),
+  SNR = round(snr, 2),
+  check.names = FALSE
+)
+
+print(summary_table)
+
+cat("\n\nMethod Characteristics:\n")
+cat("- PCA:        Standard, no sparsity, no background correction\n")
+cat("- Sparse PCA: Induces sparsity (L1 penalty), no background\n")
+cat("- cPCA:       Uses background data, no sparsity\n")
+cat("- scPCA:      Uses background data + induces sparsity (best of both)\n")
+
+cat("\n\nSelected Parameters:\n")
+cat("- Sparse PCA: alpha =", 0.5, ", beta =", 0.5, "\n")
+cat("- cPCA:       contrast =", round(cpca_result$contrast, 3), "\n")
+cat("- scPCA:      contrast =", round(scpca_result$contrast, 3), 
+    ", penalty =", round(scpca_result$penalty, 3), "\n")
+
+# ------------------------------------------------------------
+# Save figures (optional)
+# ------------------------------------------------------------
+# ggsave("all_fig1_loadings.png", fig1, width = 10, height = 10, dpi = 150)
+# ggsave("all_fig2_recovery.png", fig2, width = 8, height = 5, dpi = 150)
+# ggsave("all_fig3_precision_recall.png", fig3, width = 10, height = 5, dpi = 150)
+# ggsave("all_fig4_breakdown.png", fig4, width = 8, height = 5, dpi = 150)
+# ggsave("all_fig5_magnitude.png", fig5, width = 10, height = 5, dpi = 150)
+# ggsave("all_fig6_snr.png", fig6, width = 8, height = 5, dpi = 150)
+# ggsave("all_fig7_scores.png", fig7, width = 10, height = 8, dpi = 150)
+```
+
